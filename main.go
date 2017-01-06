@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"time"
+	"strings"
 
 	"github.com/o3ma/o3"
 )
@@ -20,32 +22,39 @@ func main() {
 		tid     o3.ThreemaID
 		pubnick = "parrot"
 		rid     = "8S3HMY9Z"
+		err     error
 	)
 
 	// check whether an id file exists or else create a new one
 	if _, err := os.Stat(idpath); err != nil {
-		var err error
+
+		fmt.Printf("Creating new identity\n")
 		tid, err = tr.CreateIdentity()
 		if err != nil {
 			fmt.Println("CreateIdentity failed")
 			log.Fatal(err)
 		}
+
 		fmt.Printf("Saving ID to %s\n", idpath)
 		err = tid.SaveToFile(idpath, pass)
 		if err != nil {
 			fmt.Println("saving ID failed")
 			log.Fatal(err)
 		}
+
 	} else {
+
 		fmt.Printf("Loading ID from %s\n", idpath)
 		tid, err = o3.LoadIDFromFile(idpath, pass)
 		if err != nil {
 			log.Fatal(err)
 		}
+
 	}
-	fmt.Printf("Using ID: %s\n", tid.String())
 
 	tid.Nick = o3.NewPubNick(pubnick)
+	fmt.Printf("My ID: %s [%s]\n", tid.Nick, tid.String())
+	//fmt.Printf("My ID: %#v\n", tid)
 
 	ctx := o3.NewSessionContext(tid)
 
@@ -73,14 +82,14 @@ func main() {
 	// (just demonstration purposes \bc sending and receiving functions do this lookup for us)
 	if _, b := ctx.ID.Contacts.Get(rid); b == false {
 		//retrieve the ID from Threema's servers
-		myID := o3.NewIDString(rid)
-		fmt.Printf("Retrieving %s from directory server\n", myID.String())
-		myContact, err := tr.GetContactByID(myID)
+		remoteID := o3.NewIDString(rid)
+		fmt.Printf("Retrieving %s from directory server\n", remoteID.String())
+		remoteContact, err := tr.GetContactByID(remoteID)
 		if err != nil {
 			log.Fatal(err)
 		}
 		// add them to our address book
-		ctx.ID.Contacts.Add(myContact)
+		ctx.ID.Contacts.Add(remoteContact)
 
 		//and save the address book
 		fmt.Printf("Saving addressbook to %s\n", abpath)
@@ -90,6 +99,10 @@ func main() {
 			log.Fatal(err)
 		}
 	}
+
+	remoteID, _ := ctx.ID.Contacts.Get(rid)
+	fmt.Printf("Remote ID: %s [%s]\n", remoteID.Name, rid)
+	//fmt.Printf("Remote ID: %#v\n", remoteID)
 
 	// let the session begin
 	fmt.Println("Starting session")
@@ -105,27 +118,111 @@ func main() {
 		log.Fatal(err)
 	}
 
+
+
 	// handle incoming messages
 	for receivedMessage := range receiveMsgChan {
+
 		if receivedMessage.Err != nil {
 			fmt.Printf("Error Receiving Message: %s\n", receivedMessage.Err)
 			continue
 		}
+
 		switch msg := receivedMessage.Msg.(type) {
+
+// -----------
+// MEDIA
+
 		case o3.ImageMessage:
-			// display the image if you like
+			// TODO: display the image if you like
+			fmt.Printf("ImageMessage: [%s] %s.\n%v\n", msg.Sender().String(), "", msg)
+
 		case o3.AudioMessage:
-			// play the audio if you like
+			// TODO: play the audio if you like
+			fmt.Printf("AudioMessage: [%s] %s.\n%v\n", msg.Sender().String(), "", msg)
+
+// -----------
+// TEXT
 		case o3.TextMessage:
-			// respond with a quote of what was send to us.
-			// to make the quote render nicely in the app we use "markdown"
-			// of the form "> PERSONWEQUOTE: Text of qoute\nSomething we wanna add."
-			qoute := fmt.Sprintf("> %s: %s\n%s", msg.Sender(), msg.Text(), "Exactly!")
-			// we use the convinient "SendTextMessage" function to send
-			err = ctx.SendTextMessage(msg.Sender().String(), qoute, sendMsgChan)
-			if err != nil {
-				log.Fatal(err)
+
+			fmt.Printf("TextMessage: ~%s [%s]: %s\n", msg.PubNick(), msg.Sender().String(), msg.Text())
+
+			// continue only if it's not a message we sent to ourselves, avoid recursive qoutes of qoutes
+			if (tid.String() == msg.Sender().String()) {
+				continue
 			}
+
+			// ---------------------------------
+			// Check senders name and compare it to address-book
+			// Prefere addressbook name, but if missing, use ~PubNick 
+			// TODO : put addressbook stuff into library
+			var pubNick, sender string
+
+			pubNick = fmt.Sprintf("~%s", msg.PubNick().String()) // Threema uses tilde-prefix for sender assined names
+			sender = msg.Sender().String()
+			remoteID := o3.NewIDString(sender)
+			
+			// addressbook contact missing, so add it
+			if _, b := ctx.ID.Contacts.Get(sender); b == false {
+				fmt.Printf("contact missing in addressbook, so add it\n")
+
+				//retrieve the ID from Threema's servers
+				fmt.Printf("Retrieving %s from directory server\n", remoteID.String())
+				remoteContact, err := tr.GetContactByID(remoteID)
+				if err != nil {
+					log.Fatal(err)
+				}
+				// add pubNix the sender told us
+				remoteContact.Name = pubNick 
+				// add them to our address book
+				ctx.ID.Contacts.Add(remoteContact)
+				// save the address book
+				fmt.Printf("Saving addressbook to %s\n", abpath)
+				err = ctx.ID.Contacts.SaveTo(abpath)
+				if err != nil {
+					fmt.Println("saving addressbook failed")
+					log.Fatal(err)
+				}
+			}
+			
+			// addressbook use contact from
+			remoteContact, _ := ctx.ID.Contacts.Get(sender)
+
+			// addressbook does not contain name, so set senders information
+			if (remoteContact.Name == "" ) {
+				fmt.Printf("addressbook does not contain name, so set senders information: %s\n", pubNick)
+				// add pubNic the sender told us
+				remoteContact.Name = pubNick 
+				// add them to our address book
+				ctx.ID.Contacts.Add(remoteContact)
+				// save the address book
+				fmt.Printf("Saving addressbook to %s\n", abpath)
+				err = ctx.ID.Contacts.SaveTo(abpath)
+				if err != nil {
+					fmt.Println("saving addressbook failed")
+					log.Fatal(err)
+				}
+			}
+
+			// addressbook contains senders tilde-name and is updatet by sender, so change it
+			if (remoteContact.Name[0] == '~' && remoteContact.Name != pubNick ) {
+				fmt.Printf("addressbook contains senders tilde-name and name is updatet, so change it from %s to %s\n", remoteContact.Name, pubNick)
+				// set the new pubNic the sender told us
+				remoteContact.Name = pubNick 
+				// add them to our address book
+				ctx.ID.Contacts.Add(remoteContact)
+				// save the address book
+				fmt.Printf("Saving addressbook to %s\n", abpath)
+				err = ctx.ID.Contacts.SaveTo(abpath)
+				if err != nil {
+					fmt.Println("saving addressbook failed")
+					log.Fatal(err)
+				}
+			}
+
+			// output the message sent
+			fmt.Printf("TextMessage: %s (%s) [%s]: %s\n", remoteContact.Name, pubNick, msg.Sender().String(), msg.Text())
+
 			// confirm to the sender that we received the message
 			// this is how one can send messages manually without helper functions like "SendTextMessage"
 			drm, err := o3.NewDeliveryReceiptMessage(&ctx, msg.Sender().String(), msg.ID(), o3.MSGDELIVERED)
@@ -133,22 +230,51 @@ func main() {
 				log.Fatal(err)
 			}
 			sendMsgChan <- drm
-			// give a thumbs up
-			upm, err := o3.NewDeliveryReceiptMessage(&ctx, msg.Sender().String(), msg.ID(), o3.MSGAPPROVED)
+
+			// confirm to the sender that we read the message
+			red, err := o3.NewDeliveryReceiptMessage(&ctx, msg.Sender().String(), msg.ID(), o3.MSGREAD)
 			if err != nil {
 				log.Fatal(err)
 			}
-			sendMsgChan <- upm
+			sendMsgChan <- red
+
+			// give a thumbs up
+			//upm, err := o3.NewDeliveryReceiptMessage(&ctx, msg.Sender().String(), msg.ID(), o3.MSGAPPROVED)
+			//if err != nil {
+			//	log.Fatal(err)
+			//}
+			//sendMsgChan <- upm
+
+			// respond with a quote of what was send to us. Multiline quote possible.
+			qoute := fmt.Sprintf("> %s: %s\n%s", msg.Sender(), strings.Replace(msg.Text(), "\n", "\n> ", -1), "Exactly!")
+			// we use the convinient "SendTextMessage" function to send
+			err = ctx.SendTextMessage(msg.Sender().String(), qoute, sendMsgChan)
+			if err != nil {
+				log.Fatal(err)
+			}
+
+// -----------
+// GROUP
 		case o3.GroupTextMessage:
-			fmt.Printf("%s for Group [%x] created by [%s]:\n%s\n", msg.Sender(), msg.GroupID(), msg.GroupCreator(), msg.Text())
+			// TODO: ERROR: SendGroupTextMessage does not send to group
+			fmt.Printf("GroupTextMessage: ~%s [%s] for Group [%x] created by [%s]\n", msg.PubNick(), msg.Sender(), msg.GroupID(), msg.GroupCreator())
+			fmt.Printf("GroupTextMessage: Text: %s\n", msg.Text())
+
 			group, ok := ctx.ID.Groups.Get(msg.GroupCreator(), msg.GroupID())
 			if ok {
-				ctx.SendGroupTextMessage(group, "This is a group reply!", sendMsgChan)
+				time.Sleep(500 * time.Millisecond)
+				// respond with a quote of what was send to us. Multiline quote possible.
+				qoute := fmt.Sprintf("> %s: %s\n%s", msg.Sender(), strings.Replace(msg.Text(), "\n", "\n> ", -1), "Exactly in group!")
+				ctx.SendGroupTextMessage(group, qoute, sendMsgChan)
+			} else {
+				fmt.Printf("ERROR sending to group [%x] by [%s].\n", msg.GroupID(), msg.GroupCreator())
 			}
+
 		case o3.GroupManageSetNameMessage:
+			// TODO: create group-list-entry if missing, update internal group-name
 			fmt.Printf("Group [%x] is now called %s\n", msg.GroupID(), msg.Name())
+
 		case o3.GroupManageSetMembersMessage:
-			fmt.Printf("Group [%x] now includes %v\n", msg.GroupID(), msg.Members())
 			// TODO: this should be done in Add()
 			_, ok := ctx.ID.Groups.Get(msg.Sender(), msg.GroupID())
 			members := msg.Members()
@@ -161,17 +287,46 @@ func main() {
 					}
 				}
 			}
+
 			// TODO: add only adds if the group is new so updates on the member list do not work yet
 			ctx.ID.Groups.Add(o3.Group{CreatorID: msg.Sender(), GroupID: msg.GroupID(), Members: members})
 			ctx.ID.Groups.SaveToFile(gdpath)
+			fmt.Printf("Group [%x] now includes %v\n", msg.GroupID(), msg.Members())
+
 		case o3.GroupMemberLeftMessage:
+			// TODO : change grp.Members?
 			fmt.Printf("Member [%s] left the Group [%x]\n", msg.Sender(), msg.GroupID())
+
+// -----------
+// STATUS
 		case o3.DeliveryReceiptMessage:
-			fmt.Printf("Message [%x] has been acknowledged by the server.\n", msg.MsgID())
+			switch msg.Status() {
+			case o3.MSGDELIVERED:
+				fmt.Printf("Message [%x] was received by ~%s [%s]\n", msg.MsgID(), msg.PubNick(), msg.Sender())
+			case o3.MSGREAD:
+				fmt.Printf("Message [%x] was read by ~%s [%s]\n", msg.MsgID(), msg.PubNick(), msg.Sender())
+			case o3.MSGAPPROVED:
+				fmt.Printf("Message [%x] was approved (thumb up) by ~%s [%s]\n", msg.MsgID(), msg.PubNick(), msg.Sender())
+			case o3.MSGDISAPPROVED:
+				fmt.Printf("Message [%x] was disapproved (thumb down) by ~%s [%s]\n", msg.MsgID(), msg.PubNick(), msg.Sender())
+			default:
+				fmt.Printf("Unknown Status. Message [%x] has been acknowledged by ~%s [%s] BUT Status unknown: %s\n", msg.MsgID(), msg.MsgID(), msg.PubNick(), msg.Sender(),  msg.Status())
+				fmt.Printf("Message: %#v\n", msg)
+			}
+
 		case o3.TypingNotificationMessage:
-			fmt.Printf("Typing Notification from %s: [%x]\n", msg.Sender(), msg.OnOff)
+			switch msg.OnOff {
+				case 0:
+					fmt.Printf("Contact ~%s [%s] is not typing.\n", msg.PubNick(), msg.Sender())
+				case 1:
+					fmt.Printf("Contact ~%s [%s] is typing.\n", msg.PubNick(), msg.Sender())
+				default:
+					fmt.Printf("Unknown typing notification for %s: %s \n", msg.Sender(), msg.PubNick(), msg.OnOff)
+			}
+
 		default:
 			fmt.Printf("Unknown message type from: %s\nContent: %#v", msg.Sender(), msg)
+
 		}
 	}
 
