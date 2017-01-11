@@ -1,17 +1,18 @@
-// This little program uses qrencode to generate the QR-Code you need
-// to get Threema-Status "green" for your bots.
-// You need Package qrencode installed on your system:  # apt-get install qrencode
+// This program uses github.com/skip2/go-qrcode to generate the QR-Code you need,
+// to get Threema-Status green for your bots.
 package main
 
 import (
 	"fmt"
 	"log"
 	"os"
-	"os/exec"
 
 	"github.com/o3ma/o3"
-)
 
+	// https://github.com/skip2/go-qrcode
+	// $ go get -u github.com/skip2/go-qrcode/...
+	qrcode "github.com/skip2/go-qrcode"
+)
 
 func main() {
 	var (
@@ -32,13 +33,12 @@ func main() {
 	}
 
 	// concat QR-Code content. "3mid" maybe is a shortcut for Threema-ID
-	qrcode := fmt.Sprintf("3mid:%s,%x", tid.String(), tid.GetPubKey()[:])
-	fmt.Printf(qrcode + "\n")
+	qrtext := fmt.Sprintf("3mid:%s,%x", tid.String(), tid.GetPubKey()[:])
+	fmt.Printf(qrtext + "\n")
 
-	// shell-execute command to generate the PNG-Image "threemaid.png"
-	qrcode_command := fmt.Sprintf("qrencode  -l Q -o threemaid.png \"%s\"", qrcode)
-	c := exec.Command("sh","-c", qrcode_command)
-	if err := c.Run(); err != nil { 
-		fmt.Println("Error: ", err)
+	// generate the PNG-Image "threemaid.png"
+	err := qrcode.WriteFile(qrtext, qrcode.Medium, 256, "threemaid.png")
+	if err != nil { 
+		log.Fatal(err)
 	}
 }
